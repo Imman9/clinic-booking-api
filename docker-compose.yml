@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: clinic
+      POSTGRES_USER: clinic
+      POSTGRES_PASSWORD: clinic
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinic -d clinic"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://clinic:clinic@db:5432/clinic
+      CLINIC_TIMEZONE: Africa/Nairobi
+      BOOKING_BUFFER_MINUTES: 60
+    ports: ["8000:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
