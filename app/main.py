@@ -21,4 +21,5 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 @app.get("/health", tags=["system"])
 def health():
+    # Keep this lightweight endpoint available for service health checks.
     return {"status": "ok"}
