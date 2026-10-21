@@ -252,4 +252,89 @@ Tests run against **real PostgreSQL**, not SQLite, because the concurrency guara
 ---
 
 ## 4. AI reflection
+## AI Usage and Engineering Decisions
+
+### 1. How I Used AI Across the Four Sections
+
+- **Section 1: Design**  
+  I used AI as a sounding board to pressure-test my data model choices (`Doctor`, `WorkingHours`, `Patient`, and `Appointment`) and identify potential edge cases, including cancelled-slot reuse, timezone boundaries, and concurrent bookings. I wrote the design document myself.
+
+- **Section 2: API Implementation**  
+  I used AI to scaffold boilerplate code, including Pydantic schemas, SQLAlchemy session configuration, Alembic configuration, and an initial draft of pytest fixtures. I reviewed and rewrote the booking and availability logic myself.
+
+- **Section 3: Deployment and CI/CD**  
+  I used AI to draft the GitHub Actions workflow, including a test job for pull requests and a deployment job for merges. I also used it to help debug Render environment configuration and `DATABASE_URL` issues.
+
+- **Section 4: Final Review**  
+  I used AI only to review the clarity of my written responses. The content and engineering decisions are my own.
+
+### 2. An Example of AI Improving My Work
+
+My initial approach to preventing double-booking was to check whether a time slot was available in the application and then insert the appointment. I asked AI:
+
+> I'm building a FastAPI + PostgreSQL booking endpoint. Two requests for the same doctor and slot arrive at the same time. How can both pass my availability check, and how do I prevent it?
+
+The response highlighted the **check-then-insert race condition**. Two concurrent requests could both pass the availability check before either request inserted its appointment.
+
+The solution was to enforce uniqueness at the database level using a **partial unique index** on `(doctor_id, start_time)` for appointments whose status is `booked`. The API catches the resulting `IntegrityError` and returns `409 Conflict` when another request has already booked the same slot.
+
+The application also enforces 30-minute appointments on the `:00` and `:30` grid. Under these rules, valid appointments for the same doctor can only be adjacent or share the same start time. The partial unique index prevents two booked appointments from sharing that start time, including when concurrent requests attempt the same booking.
+
+This approach combines application-level validation with a database-enforced uniqueness guarantee without introducing additional locking logic. However, it does not prevent arbitrary overlapping time ranges if appointments are inserted directly into the database while bypassing the API's validation rules.
+
+### 3. An Example of Incorrect AI Output and How I Caught It
+
+AI initially generated a standard unique constraint:
+
+```python
+UniqueConstraint("doctor_id", "start_time")
+```
+
+Although this looked correct, it did not account for cancelled appointments. I discovered the issue while writing a test for the scenario where a patient cancels an appointment and another patient subsequently books the same slot. The test failed with an integrity error because the cancelled appointment still occupied the unique key.
+
+I corrected the implementation by replacing the standard unique constraint with a partial unique index that applies only to booked appointments. I then added tests covering cancellation followed by rebooking and rescheduling into a slot freed by another cancellation.
+
+I also identified an issue with the use of naive `datetime.now()` for validating whether a booking was in the past. Although this could work in my local environment, it could produce incorrect comparisons when the application runs on a server using a different timezone.
+
+I addressed this by using timezone-aware datetimes, storing timestamps in UTC, and interpreting working hours in the `Africa/Nairobi` timezone.
+
+These examples reinforced the importance of validating generated code against actual requirements and edge cases rather than assuming that plausible-looking code is correct.
+
+### 4. Engineering Decisions I Made Independently
+
+#### Decision 1: Compute Availability Instead of Storing Time Slots
+
+I decided to calculate availability on demand from a doctor's working hours, excluding slots occupied by booked appointments, rather than creating and storing individual slot records in advance.
+
+For an initial system supporting five doctors, this avoids maintaining a separate table of generated slots that would require additional storage, synchronization, and cleanup whenever working hours or bookings change.
+
+Computing availability on demand keeps the implementation relatively simple while allowing the system to evolve. If query volume grows significantly, availability calculations could later be optimized using caching or materialized availability data.
+
+I made this decision based on the expected scale of the system and the need to keep the initial implementation maintainable without introducing unnecessary complexity.
+
+#### Decision 2: Define API Error Semantics
+
+I independently chose the HTTP status codes used to communicate different failure scenarios:
+
+| Status Code | Scenario |
+| --- | --- |
+| `400 Bad Request` | Business-rule violations, such as booking in the past, booking outside working hours, or cancelling an already-cancelled appointment. |
+| `404 Not Found` | The requested doctor or appointment does not exist. |
+| `409 Conflict` | The requested time slot has already been booked. |
+| `422 Unprocessable Entity` | The request contains invalid input or fails schema validation. |
+
+I made these decisions based on established API conventions and the expected behavior of client applications. The goal was to distinguish malformed requests, missing resources, business-rule violations, and booking conflicts so clients can respond appropriately to each failure.
+
+### 5. Database Integrity and Future Improvements
+
+The current implementation relies on application-level validation to enforce 30-minute appointment durations and restrict start times to the `:00` and `:30` grid. Combined with a partial unique index on `(doctor_id, start_time)` for booked appointments, this prevents overlapping bookings through the API under the defined scheduling rules.
+
+However, the database does not currently have a PostgreSQL exclusion constraint that independently rejects overlapping time ranges. Direct database writes that bypass the API could therefore insert appointments with invalid durations or off-grid start times, potentially creating overlaps.
+
+If stronger database-level protection becomes necessary, the next step would be to introduce a PostgreSQL **GiST exclusion constraint** on the doctor's identifier and appointment time range, restricted to booked appointments. This would allow PostgreSQL to reject overlapping intervals independently of the application entry point.
+
+For the current scope, I chose the simpler implementation because the API enforces a fixed appointment duration and scheduling grid. The exclusion constraint remains a documented improvement for a future version that needs to protect against arbitrary overlapping intervals or writes from multiple independent systems.
+
+
+
 
