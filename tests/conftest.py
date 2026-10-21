@@ -44,8 +44,8 @@ def client():
             doctor.working_hours = [
                 WorkingHour(
                     day_of_week=day,
-                    start_time=time(0),
-                    end_time=time(23, 59),
+                    start_time=time(9),
+                    end_time=time(17),
                 )
                 for day in range(7)
             ]
