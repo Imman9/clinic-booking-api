@@ -237,7 +237,7 @@ Tests run against **real PostgreSQL**, not SQLite, because the concurrency guara
 
 ## 3. Deployment and CI/CD
 
-- **Public URL:** TODO(you): `https://<your-app>.onrender.com`
+- **Public URL:**: `https://clinic-booking-api-0uyy.onrender.com/`
 - **Host:** Render web service built from the repo's `Dockerfile`, with a managed PostgreSQL instance (`DATABASE_URL` set as an environment variable).
 - **Deploy branch:** `main`. Merging a pull request into `main` triggers a deployment.
 
@@ -247,13 +247,10 @@ Tests run against **real PostgreSQL**, not SQLite, because the concurrency guara
 2. **On push to `main` (that is, a merge):** the same test job runs first. A second `deploy` job that `needs: test` calls the Render deploy hook (`RENDER_DEPLOY_HOOK_URL` repository secret). If tests fail, nothing deploys.
 3. Render's own auto-deploy is turned **off**, so the hook is the only deploy path and it can only fire after passing tests.
 4. On container start, the Dockerfile command runs `alembic upgrade head` and then Uvicorn, so the schema is always current after a deploy.
-5. TODO(you): after setup, enable branch protection on `main` (require a PR and the passing `test` check), and confirm in the README that you did.
 
 ---
 
 ## 4. AI reflection
-## AI Usage and Engineering Decisions
-
 ### 1. How I Used AI Across the Four Sections
 
 - **Section 1: Design**  
@@ -318,7 +315,7 @@ I independently chose the HTTP status codes used to communicate different failur
 
 | Status Code | Scenario |
 | --- | --- |
-| `400 Bad Request` | Business-rule violations, such as booking in the past, booking outside working hours, or cancelling an already-cancelled appointment. |
+| `422 Unprocessable Entity` | Business-rule violations, such as booking in the past, booking outside working hours, or cancelling an already-cancelled appointment. |
 | `404 Not Found` | The requested doctor or appointment does not exist. |
 | `409 Conflict` | The requested time slot has already been booked. |
 | `422 Unprocessable Entity` | The request contains invalid input or fails schema validation. |
