@@ -58,6 +58,8 @@ def cancel_appointment(db: Session, appointment_id: int, reason: str) -> Appoint
     appt = db.get(Appointment, appointment_id)
     if not appt: raise not_found("Appointment")
     if appt.status == "CANCELLED": raise conflict("ALREADY_CANCELLED", "Appointment has already been cancelled.")
+    if as_utc(appt.start_time) <= datetime.now(UTC):
+        raise invalid("APPOINTMENT_ALREADY_STARTED", "An appointment can only be cancelled before it starts.")
     if not reason.strip(): raise invalid("REASON_REQUIRED", "A cancellation reason is required.")
     appt.status, appt.cancel_reason, appt.cancelled_at = "CANCELLED", reason.strip(), datetime.now(UTC)
     db.commit(); db.refresh(appt)

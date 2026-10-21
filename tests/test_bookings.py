@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime as RealDateTime, timedelta
 import os
 from threading import Barrier
 
@@ -23,6 +24,8 @@ def test_book_slot_and_prevent_double_booking(client):
     payload = booking_payload()
     created = client.post("/appointments", json=payload)
     assert created.status_code == 201
+    assert created.json()["start_time"].endswith("+03:00")
+    assert created.json()["end_time"].endswith("+03:00")
 
     conflict = client.post("/appointments", json=payload)
     assert conflict.status_code == 409
@@ -100,6 +103,8 @@ def test_cancel_releases_slot_so_it_can_be_booked_again(client):
     )
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "CANCELLED"
+    assert cancelled.json()["start_time"].endswith("+03:00")
+    assert cancelled.json()["end_time"].endswith("+03:00")
 
     rebooked = client.post("/appointments", json=payload)
     assert rebooked.status_code == 201
@@ -126,6 +131,29 @@ def test_cancel_requires_a_nonblank_reason(client):
     )
     assert blank.status_code == 422
     assert blank.json()["error"]["code"] == "REASON_REQUIRED"
+
+
+@pytest.mark.parametrize("minutes_after_start", [0, 1])
+def test_cancel_at_or_after_appointment_start_is_rejected(client, monkeypatch, minutes_after_start):
+    from tests.helpers import as_datetime
+
+    appointment = client.post("/appointments", json=booking_payload()).json()
+    start = as_datetime(appointment["start_time"])
+
+    class FrozenDateTime(RealDateTime):
+        @classmethod
+        def now(cls, tz=None):
+            current = start + timedelta(minutes=minutes_after_start)
+            return current.astimezone(tz) if tz else current.replace(tzinfo=None)
+
+    monkeypatch.setattr("app.services.appointments.datetime", FrozenDateTime)
+    response = client.patch(
+        f"/appointments/{appointment['id']}/cancel",
+        json={"reason": "Too late"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "APPOINTMENT_ALREADY_STARTED"
 
 
 def test_concurrent_bookings_for_same_slot_only_allow_one(client):

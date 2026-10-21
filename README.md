@@ -77,7 +77,7 @@ For a booking (and for the target of a reschedule), checks run in this order, so
 - The clinic timezone is configurable (`CLINIC_TIMEZONE`, default `Africa/Nairobi`, UTC+3, no DST).
 - Clients must send ISO-8601 datetimes **with an offset** (`+03:00` or `Z`). Naive datetimes are rejected with 422, because guessing the timezone is how booking bugs happen.
 - Working hours are interpreted in clinic time. So `09:30Z` is 12:30 in Nairobi and is checked against the doctor's hours as 12:30, not 09:30.
-- The `date` for availability is a **clinic-local calendar date**. Responses return times in clinic time with the offset included.
+- The `date` for availability is a **clinic-local calendar date**. Availability and appointment responses return times in clinic time with the offset included.
 - Everything is stored and compared in UTC internally.
 
 ### 1.7 Decisions and trade-offs
@@ -91,18 +91,18 @@ For a booking (and for the target of a reschedule), checks run in this order, so
 | Time | UTC storage, clinic-local rules | Naive local times | Avoids offset bugs and keeps multi-clinic growth open. |
 | Database | PostgreSQL | SQLite | Partial indexes, real transactions, and the same engine locally, in CI and in production. |
 | Sync vs async | Synchronous SQLAlchemy | Async SQLAlchemy | Simpler sessions and tests; no real benefit at this scale. Async is a later optimisation. |
-| Migrations | Alembic everywhere | `create_all()` on startup | The partial index and schema changes are versioned and identical in every environment. |
+| Migrations | Alembic for PostgreSQL tests and deployments | `create_all()` for the SQLite fallback | PostgreSQL tests exercise the same versioned schema and partial index as deployment. |
 
 ### 1.8 Assumptions (ambiguities I resolved)
 
 1. Slot length is fixed at 30 minutes; a booking's `start_time` must sit on a 30-minute boundary.
-2. "In the past" means `start_time <= now`; the bonus rule also requires at least 60 minutes of lead time (`BOOKING_BUFFER_MINUTES`). It applies to booking and to the reschedule target.
+2. "In the past" means `start_time < now`; the bonus rule also requires at least 60 minutes of lead time (`BOOKING_BUFFER_MINUTES`). It applies to booking and to the reschedule target.
 3. Unknown doctor or patient returns **404**. A doctor with no hours that day returns **200** with an empty list, because "no slots" is a valid answer and "no such doctor" is not.
 4. Cancelling an already cancelled appointment returns **409**, not an idempotent 200. The brief says to return an error.
 5. Rescheduling a cancelled appointment returns **409**. Rescheduling to the slot it already holds returns **422** (no-op).
 6. Reschedule is for the **same doctor** only. Changing doctor means cancel plus a new booking.
 7. A cancellation reason is required and non-empty.
-8. There is no cancellation cutoff window; a patient can cancel any time before the appointment.
+8. Cancellation is allowed only before the appointment start; cancelling at or after its start returns **422**.
 9. `GET /patients/{id}/appointments` returns **upcoming, non-cancelled** appointments sorted by start time ascending.
 10. **No authentication.** `patient_id` is passed in the request. Real auth (JWT, patient-scoped access, doctor/admin roles) is the first next step.
 
@@ -123,11 +123,10 @@ For a booking (and for the target of a reschedule), checks run in this order, so
 ### 2.1 Run locally
 
 ```bash
-cp .env.example .env
 docker compose up --build        # API on http://localhost:8000, Postgres included
-docker compose exec api alembic upgrade head
-docker compose exec api python -m app.seed   # 5 doctors, working hours, sample patients
 ```
+
+Compose applies migrations and seeds demo data for local use. The container seeds demo data only when `SEED_DEMO_DATA=true`; leave it unset in production unless demo records are intended.
 
 Interactive docs: `http://localhost:8000/docs`
 
@@ -145,9 +144,10 @@ uvicorn app.main:app --reload
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | none (required) | Postgres connection string |
+| `DATABASE_URL` | `sqlite:///./clinic.db` | Database connection string; configure PostgreSQL for deployment |
 | `CLINIC_TIMEZONE` | `Africa/Nairobi` | Timezone used for working hours and the availability `date` |
 | `BOOKING_BUFFER_MINUTES` | `60` | Minimum lead time before a booking or reschedule target |
+| `SEED_DEMO_DATA` | `false` | Set to `true` to insert the demo doctors, hours and patients at startup |
 
 ### 2.3 Endpoints
 
@@ -168,10 +168,10 @@ uvicorn app.main:app --reload
 | 409 | Slot already taken; appointment already cancelled; rescheduling a cancelled appointment |
 | 422 | Invalid input: naive datetime, off the 30-minute grid, in the past, inside the lead-time buffer, outside working hours, missing reason, no-op reschedule |
 
-All errors, including FastAPI's own request validation errors, share one shape:
+Domain, validation, HTTP, and unexpected server errors share one shape. Unexpected server errors return a generic message; diagnostic details are logged server-side.
 
 ```json
-{ "error": { "code": "SLOT_TAKEN", "message": "Dr. Achieng already has an appointment at 2026-11-02T09:00:00+03:00." } }
+{ "error": { "code": "SLOT_TAKEN", "message": "The selected slot is already booked." } }
 ```
 
 ### 2.5 Quick tour
@@ -221,14 +221,15 @@ tests/                 # pytest suite
 
 ```bash
 docker compose up -d db
-TEST_DATABASE_URL=postgresql+psycopg://... pytest -v
+docker compose exec db psql -U clinic -d clinic -c "CREATE DATABASE clinic_test"
+docker compose run --build --rm -e TEST_DATABASE_URL=postgresql+psycopg://clinic:clinic@db:5432/clinic_test api python -m pytest -v
 ```
 
-Tests run against **real PostgreSQL**, not SQLite, because the concurrency guarantee depends on a Postgres partial unique index. Coverage:
+The PostgreSQL test fixture applies the Alembic migration once and preserves the schema while clearing rows between tests. Use PostgreSQL to exercise the concurrency guarantee and migrated partial unique index. With no `TEST_DATABASE_URL`, tests fall back to in-memory SQLite and the concurrency test skips itself. Coverage:
 
 - Booking: happy path; outside working hours; in the past; inside the 1-hour buffer; off-grid time; naive datetime; unknown doctor or patient.
 - **Concurrency:** two simultaneous bookings of the same slot; exactly one succeeds and the other gets 409.
-- Cancel: requires a reason; second cancel returns 409; the slot is bookable again afterwards.
+- Cancel: requires a reason; cancellation at or after start returns 422; second cancel returns 409; the slot is bookable again afterwards.
 - Reschedule: success frees the old slot; target validated like a fresh booking; taken target returns 409 and leaves the original intact; cancelled appointment returns 409; same-slot returns 422.
 - Availability: excludes booked, past and in-buffer slots; empty list on a non-working day; honours the Nairobi timezone.
 - Patient list: upcoming only, sorted, excludes cancelled.
@@ -243,10 +244,10 @@ Tests run against **real PostgreSQL**, not SQLite, because the concurrency guara
 
 ### Pipeline (`.github/workflows/ci.yml`)
 
-1. **On every pull request to `main`:** start a Postgres service container, install dependencies, run `pytest -v`.
+1. **On every pull request to `main`:** start a Postgres service container, install dependencies, apply Alembic migrations, and run `pytest -v` against the migrated schema.
 2. **On push to `main` (that is, a merge):** the same test job runs first. A second `deploy` job that `needs: test` calls the Render deploy hook (`RENDER_DEPLOY_HOOK_URL` repository secret). If tests fail, nothing deploys.
 3. Render's own auto-deploy is turned **off**, so the hook is the only deploy path and it can only fire after passing tests.
-4. On container start, the Dockerfile command runs `alembic upgrade head` and then Uvicorn, so the schema is always current after a deploy.
+4. On container start, the Dockerfile command runs `alembic upgrade head`, optionally seeds demo data when `SEED_DEMO_DATA=true`, and then starts Uvicorn. Keep demo seeding disabled in production unless those records are intended.
 5. TODO(you): after setup, enable branch protection on `main` (require a PR and the passing `test` check), and confirm in the README that you did.
 
 ---

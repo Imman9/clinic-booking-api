@@ -1,5 +1,7 @@
-from datetime import date, datetime
-from pydantic import BaseModel, ConfigDict, Field
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+from app.config import settings
 
 
 class BookingCreate(BaseModel):
@@ -26,6 +28,12 @@ class AppointmentOut(BaseModel):
     end_time: datetime
     status: str
     cancel_reason: str | None = None
+
+    @field_serializer("start_time", "end_time")
+    def serialize_appointment_times(self, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(ZoneInfo(settings.clinic_timezone))
 
 
 class SlotOut(BaseModel):

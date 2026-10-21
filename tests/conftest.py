@@ -1,10 +1,14 @@
 
 from datetime import time
 import os
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -13,8 +17,8 @@ from app.main import app
 from app.models import Base, Doctor, Patient, WorkingHour
 
 
-@pytest.fixture
-def client():
+@pytest.fixture(scope="session")
+def test_engine():
     test_url = os.getenv("TEST_DATABASE_URL", "sqlite://")
 
     options = (
@@ -27,14 +31,38 @@ def client():
     )
 
     engine = create_engine(test_url, **options)
-    testing_session = sessionmaker(
-        bind=engine,
-        autoflush=False,
-        expire_on_commit=False,
-    )
+
+    if not test_url.startswith("sqlite"):
+        # Exercise the same schema and partial index that production gets.
+        os.environ["MIGRATION_DATABASE_URL"] = test_url
+        try:
+            config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+            command.upgrade(config, "head")
+        finally:
+            os.environ.pop("MIGRATION_DATABASE_URL", None)
+    else:
+        Base.metadata.create_all(engine)
+
+    yield engine
+    if test_url.startswith("sqlite"):
+        Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
+@pytest.fixture
+def client(test_engine):
+    test_url = os.getenv("TEST_DATABASE_URL", "sqlite://")
+    engine = test_engine
+    testing_session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
     try:
-        Base.metadata.create_all(engine)
+        with testing_session() as db:
+            if test_url.startswith("sqlite"):
+                for table in reversed(Base.metadata.sorted_tables):
+                    db.execute(table.delete())
+            else:
+                db.execute(text("TRUNCATE TABLE appointments, working_hours, patients, doctors RESTART IDENTITY CASCADE"))
+            db.commit()
 
         with testing_session() as db:
             doctor = Doctor(
@@ -65,10 +93,8 @@ def client():
 
         app.dependency_overrides[get_db] = override_get_db
 
-        with TestClient(app) as test_client:
+        with TestClient(app, raise_server_exceptions=False) as test_client:
             yield test_client
 
     finally:
         app.dependency_overrides.pop(get_db, None)
-        Base.metadata.drop_all(engine)
-        engine.dispose()

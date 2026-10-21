@@ -1,11 +1,13 @@
 from logging.config import fileConfig
+import os
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from app.config import settings
 from app.models import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
+database_url = os.getenv("MIGRATION_DATABASE_URL") or os.getenv("DATABASE_URL") or settings.database_url
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 if config.config_file_name:
     fileConfig(config.config_file_name)
 target_metadata = Base.metadata

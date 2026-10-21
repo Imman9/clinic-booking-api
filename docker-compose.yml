@@ -17,6 +17,7 @@ services:
       DATABASE_URL: postgresql+psycopg://clinic:clinic@db:5432/clinic
       CLINIC_TIMEZONE: Africa/Nairobi
       BOOKING_BUFFER_MINUTES: 60
+      SEED_DEMO_DATA: "true"
     ports: ["8000:8000"]
     depends_on:
       db:
