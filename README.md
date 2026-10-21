@@ -123,10 +123,7 @@ For a booking (and for the target of a reschedule), checks run in this order, so
 ### 2.1 Run locally
 
 ```bash
-cp .env.example .env
 docker compose up --build        # API on http://localhost:8000, Postgres included
-docker compose exec api alembic upgrade head
-docker compose exec api python -m app.seed   # 5 doctors, working hours, sample patients
 ```
 
 Interactive docs: `http://localhost:8000/docs`
@@ -145,7 +142,7 @@ uvicorn app.main:app --reload
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | none (required) | Postgres connection string |
+| `DATABASE_URL` | sqlite:///./clinic.db | Postgres connection string |
 | `CLINIC_TIMEZONE` | `Africa/Nairobi` | Timezone used for working hours and the availability `date` |
 | `BOOKING_BUFFER_MINUTES` | `60` | Minimum lead time before a booking or reschedule target |
 
@@ -171,7 +168,7 @@ uvicorn app.main:app --reload
 All errors, including FastAPI's own request validation errors, share one shape:
 
 ```json
-{ "error": { "code": "SLOT_TAKEN", "message": "Dr. Achieng already has an appointment at 2026-11-02T09:00:00+03:00." } }
+{ "error": { "code": "SLOT_TAKEN", "message": "The selected slot is already booked." } }
 ```
 
 ### 2.5 Quick tour
@@ -211,7 +208,7 @@ app/
 ├── exceptions.py      # DomainError hierarchy (404 / 409 / 422)
 ├── seed.py            # 5 doctors, working hours, sample patients
 ├── routers/           # thin HTTP layer
-└── services/          # business logic (slots.py, appointments.py)
+└── services/          # business logic (appointments.py)
 alembic/               # migrations
 tests/                 # pytest suite
 .github/workflows/     # CI/CD
@@ -221,10 +218,10 @@ tests/                 # pytest suite
 
 ```bash
 docker compose up -d db
-TEST_DATABASE_URL=postgresql+psycopg://... pytest -v
+TEST_DATABASE_URL=postgresql+psycopg://... use python -m pytest -v for local instructions
 ```
 
-Tests run against **real PostgreSQL**, not SQLite, because the concurrency guarantee depends on a Postgres partial unique index. Coverage:
+CI uses **PostgreSQL** while a bare local pytest defaults to SQLite and skips the PostgreSQL-only concurrency test. Coverage:
 
 - Booking: happy path; outside working hours; in the past; inside the 1-hour buffer; off-grid time; naive datetime; unknown doctor or patient.
 - **Concurrency:** two simultaneous bookings of the same slot; exactly one succeeds and the other gets 409.
@@ -246,7 +243,7 @@ Tests run against **real PostgreSQL**, not SQLite, because the concurrency guara
 1. **On every pull request to `main`:** start a Postgres service container, install dependencies, run `pytest -v`.
 2. **On push to `main` (that is, a merge):** the same test job runs first. A second `deploy` job that `needs: test` calls the Render deploy hook (`RENDER_DEPLOY_HOOK_URL` repository secret). If tests fail, nothing deploys.
 3. Render's own auto-deploy is turned **off**, so the hook is the only deploy path and it can only fire after passing tests.
-4. On container start, the Dockerfile command runs `alembic upgrade head` and then Uvicorn, so the schema is always current after a deploy.
+4. On container start, the Dockerfile command runs `alembic upgrade head` before pytest.
 
 ---
 
