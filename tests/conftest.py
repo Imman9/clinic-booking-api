@@ -47,7 +47,7 @@ def client():
                     start_time=time(9),
                     end_time=time(17),
                 )
-                for day in range(7)
+                for day in range(5)
             ]
 
             db.add_all([
