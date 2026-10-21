@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.exceptions import DomainError
 from app.routers import appointments, doctors, patients
+from fastapi.responses import RedirectResponse
 
 app = FastAPI(title="Clinic Booking API", version="1.0.0")
 app.include_router(doctors.router)
@@ -18,6 +19,10 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     issues = exc.errors()
     message = "; ".join(f"{'.'.join(str(x) for x in e['loc'][1:])}: {e['msg']}" for e in issues)
     return JSONResponse(status_code=422, content={"error": {"code": "VALIDATION_ERROR", "message": message}})
+
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/docs")
 
 @app.get("/health", tags=["system"])
 def health():
