@@ -2,8 +2,8 @@
 
 REST API for a small clinic (5 doctors) where patients view free 30-minute slots, book, cancel and reschedule appointments. Built with **FastAPI + SQLAlchemy 2.0 + Alembic + PostgreSQL**, tested with **pytest** against real Postgres, deployed on **Render** with **GitHub Actions** CI/CD.
 
-- **Live URL:** TODO(you): `https://<your-app>.onrender.com` (interactive docs at `/docs`)
-- **Repo:** TODO(you): link
+- **Live URL:** `https://clinic-booking-api-0uyy.onrender.com/` (interactive docs at `/docs`)
+- **Repo:** https://github.com/Imman9/clinic-booking-api
 - **Deploy branch:** `main`
 
 **Contents:** [1. System design](#1-system-design) · [2. Running and using the API](#2-running-and-using-the-api) · [3. Deployment and CI/CD](#3-deployment-and-cicd) · [4. AI reflection](#4-ai-reflection)
